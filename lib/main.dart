@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supertonic_flutter/supertonic_flutter.dart';
 
 void main() => runApp(const App());
 const green = Color(0xFF176B58);
@@ -31,6 +32,11 @@ class Reader extends StatefulWidget {
 class _ReaderState extends State<Reader> {
   final text = TextEditingController();
   final tts = FlutterTts();
+  final neuralTts = SupertonicTTS();
+  final neuralPlayer = TTSAudioPlayer();
+  bool neuralReady = false, neuralLoading = false, useNeural = false;
+  double modelProgress = 0;
+  String maleVoice = 'M1';
   List<String> saved = [];
   double speed = .72, volume = .42, pause = .7, pitch = .92;
   bool checking = true, ready = false, speaking = false, advanced = false;
@@ -86,7 +92,55 @@ class _ReaderState extends State<Reader> {
       if (mounted) setState(() { checking = false; status = 'تعذّر فحص محرك الصوت: ' + e.toString(); });
     }
   }
+  Future<void> downloadNeuralVoice() async {
+    if (neuralReady || neuralLoading) return;
+    setState(() { neuralLoading = true; modelProgress = 0; status = 'جارٍ تجهيز الصوت الرجولي لأول مرة…'; });
+    try {
+      if (!await SupertonicTTS.modelsReady()) {
+        await SupertonicTTS.preDownloadModels(onProgress: (done, total, file, progress) {
+          if (mounted) setState(() => modelProgress = progress.clamp(0.0, 1.0));
+        });
+      }
+      await neuralTts.initialize();
+      if (!mounted) return;
+      setState(() { neuralReady = true; neuralLoading = false; modelProgress = 1; status = 'الصوت الرجولي المحلي جاهز. يمكنك الآن فصل الإنترنت.'; });
+      message('تم تجهيز الصوت الرجولي على الهاتف.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { neuralLoading = false; status = 'تعذّر تجهيز النموذج: $e'; });
+      message('فشل تنزيل الصوت. تحقق من الإنترنت والمساحة ثم أعد المحاولة.');
+    }
+  }
+
+  Future<void> readWithNeural() async {
+    if (!neuralReady) return message('نزّل الصوت الرجولي أولاً.');
+    if (text.text.trim().isEmpty) return message('اكتب نصاً أولاً.');
+    final paragraphs = text.text.trim().split(RegExp(r'\\n\\s*\\n')).map((x) => x.trim()).where((x) => x.isNotEmpty);
+    try {
+      await neuralPlayer.stop();
+      if (mounted) setState(() => speaking = true);
+      for (final paragraph in paragraphs) {
+        if (!mounted || !speaking) break;
+        final result = await neuralTts.synthesize(
+          paragraph,
+          language: 'ar',
+          voiceStyle: maleVoice,
+          config: TTSConfig(speechSpeed: 0.88, denoisingSteps: 5, silenceDuration: pause),
+        );
+        if (!mounted || !speaking) break;
+        await neuralPlayer.play(result);
+        if (pause > 0 && mounted && speaking) {
+          await Future<void>.delayed(Duration(milliseconds: (pause * 1000).round()));
+        }
+      }
+      if (mounted) setState(() => speaking = false);
+    } catch (e) {
+      if (mounted) setState(() { speaking = false; status = 'خطأ في الصوت الرجولي: $e'; });
+    }
+  }
+
   Future<void> readText() async {
+    if (useNeural) return readWithNeural();
     final value = text.text.trim();
     if (value.isEmpty) return message('اكتب نصاً أولاً.');
     if (!ready) return message('الصوت العربي غير جاهز.');
@@ -105,7 +159,7 @@ class _ReaderState extends State<Reader> {
       if (mounted) setState(() { speaking = false; status = 'حدث خطأ أثناء القراءة: ' + e.toString(); });
     }
   }
-  Future<void> stop() async { await tts.stop(); if (mounted) setState(() => speaking = false); }
+  Future<void> stop() async { await tts.stop(); await neuralPlayer.stop(); if (mounted) setState(() => speaking = false); }
   void message(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s), behavior: SnackBarBehavior.floating));
   Future<void> saveText() async {
     final value = text.text.trim();
@@ -127,7 +181,7 @@ class _ReaderState extends State<Reader> {
       ])))));
   }
   @override
-  void dispose() { tts.stop(); text.dispose(); super.dispose(); }
+  void dispose() { tts.stop(); neuralPlayer.dispose(); neuralTts.dispose(); text.dispose(); super.dispose(); }
   Widget slider(String label, double value, double min, double max, ValueChanged<double> change, String display) => Column(children: [
     Row(children: [Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600))), Text(display, style: const TextStyle(color: green, fontWeight: FontWeight.bold))]),
     Slider(value: value, min: min, max: max, activeColor: green, onChanged: change),
@@ -156,6 +210,27 @@ class _ReaderState extends State<Reader> {
           const SizedBox(width: 7), Expanded(child: OutlinedButton.icon(onPressed: text.clear, icon: const Icon(Icons.delete_outline), label: const Text('مسح'))),
           const SizedBox(width: 7), Expanded(child: OutlinedButton.icon(onPressed: () => text.text = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ\n\nالْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ', icon: const Icon(Icons.auto_awesome_outlined), label: const Text('مثال مشكول'))),
         ]),
+        const SizedBox(height: 16),
+        Card(child: Padding(padding: const EdgeInsets.all(15), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [const Icon(Icons.record_voice_over_rounded, color: green), const SizedBox(width: 8), const Expanded(child: Text('محرك الصوت الرجولي', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))), Switch(value: useNeural, onChanged: neuralReady ? (v) => setState(() => useNeural = v) : null)]),
+          const Text('صوت عصبي محلي مستقل عن أصوات الهاتف. يحتاج تنزيل ملفات النموذج مرة واحدة (قرابة 400 ميغابايت).', style: TextStyle(fontSize: 12, height: 1.5)),
+          const SizedBox(height: 10),
+          if (!neuralReady) ...[
+            FilledButton.icon(onPressed: neuralLoading ? null : downloadNeuralVoice, icon: const Icon(Icons.download_rounded), label: Text(neuralLoading ? 'جارٍ تنزيل ملفات الصوت…' : 'تنزيل الصوت الرجولي عبر Wi‑Fi')),
+            if (neuralLoading) ...[
+              const SizedBox(height: 8),
+              LinearProgressIndicator(value: modelProgress > 0 ? modelProgress : null),
+              const SizedBox(height: 4),
+              Text(modelProgress > 0 ? 'اكتمل ${(modelProgress * 100).round()}%' : 'يتم الاتصال بمصدر النموذج…', style: const TextStyle(fontSize: 11)),
+            ],
+          ] else ...[
+            Row(children: [
+              const Expanded(child: Text('اختر نبرة رجولية للتجربة', style: TextStyle(fontSize: 12))),
+              DropdownButton<String>(value: maleVoice, items: ['M1','M2','M3','M4','M5'].map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) => setState(() => maleVoice = v ?? 'M1')),
+            ]),
+            TextButton.icon(onPressed: () => setState(() => useNeural = true), icon: const Icon(Icons.check_circle_outline), label: Text(useNeural ? 'المحرك الرجولي محدد' : 'استخدام الصوت الرجولي')),
+          ],
+        ]))),
         const SizedBox(height: 20),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('ضبط القراءة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)), TextButton.icon(onPressed: () => setState(() => advanced = !advanced), icon: Icon(advanced ? Icons.expand_less : Icons.tune), label: Text(advanced ? 'إخفاء' : 'تخصيص'))]),
         Card(child: Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 14), child: Column(children: [
