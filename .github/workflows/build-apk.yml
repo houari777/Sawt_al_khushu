@@ -26,6 +26,9 @@ jobs:
       - name: Generate Android project files
         run: flutter create . --platforms=android --org com.sawtalkhushu
 
+      - name: Remove generated placeholder test
+        run: rm -f test/widget_test.dart
+
       - name: Install dependencies
         run: flutter pub get
 
