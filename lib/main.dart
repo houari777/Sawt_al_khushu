@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supertonic_flutter/supertonic_flutter.dart';
 
@@ -31,7 +34,12 @@ class Reader extends StatefulWidget {
 }
 class _ReaderState extends State<Reader> {
   final text = TextEditingController();
+  final apiUrlController = TextEditingController();
+  final apiKeyController = TextEditingController();
+  final apiPlayer = AudioPlayer();
   final tts = FlutterTts();
+  bool onlineMode = false;
+  bool apiBusy = false;
   final neuralTts = SupertonicTTS();
   final neuralPlayer = TTSAudioPlayer();
   bool neuralReady = false, neuralLoading = false, useNeural = false;
@@ -47,6 +55,9 @@ class _ReaderState extends State<Reader> {
   void initState() {
     super.initState();
     text.addListener(() { if (mounted) setState(() {}); });
+    apiPlayer.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => speaking = false);
+    });
     load();
     configure();
   }
@@ -139,7 +150,41 @@ class _ReaderState extends State<Reader> {
     }
   }
 
+  Future<void> readWithOnline() async {
+    final value = text.text.trim();
+    final baseUrl = apiUrlController.text.trim().replaceFirst(RegExp(r'/+$'), '');
+    final key = apiKeyController.text.trim();
+    if (value.isEmpty) return message('اكتب نصاً أولاً.');
+    if (baseUrl.isEmpty || key.isEmpty) return message('أدخل رابط الخدمة ومفتاح API أولاً.');
+    final uri = Uri.tryParse('$baseUrl/generate');
+    if (uri == null || !uri.hasScheme || !uri.hasAuthority) return message('رابط الخدمة غير صحيح.');
+
+    setState(() { apiBusy = true; speaking = true; });
+    try {
+      await apiPlayer.stop();
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json', 'X-API-Key': key},
+        body: jsonEncode({'text': value}),
+      ).timeout(const Duration(minutes: 5));
+      if (response.statusCode != 200) throw Exception('رمز الخادم: ${response.statusCode}');
+      final contentType = response.headers['content-type'] ?? '';
+      if (!contentType.contains('audio/wav') && !contentType.contains('audio/x-wav')) {
+        throw Exception('استجابة الخادم ليست ملف WAV.');
+      }
+      await apiPlayer.play(BytesSource(response.bodyBytes));
+    } catch (e) {
+      if (mounted) {
+        setState(() => speaking = false);
+        message('تعذّر توليد الهمس: $e');
+      }
+    } finally {
+      if (mounted) setState(() => apiBusy = false);
+    }
+  }
+
   Future<void> readText() async {
+    if (onlineMode) return readWithOnline();
     if (useNeural) return readWithNeural();
     final value = text.text.trim();
     if (value.isEmpty) return message('اكتب نصاً أولاً.');
@@ -159,7 +204,12 @@ class _ReaderState extends State<Reader> {
       if (mounted) setState(() { speaking = false; status = 'حدث خطأ أثناء القراءة: ' + e.toString(); });
     }
   }
-  Future<void> stop() async { await tts.stop(); await neuralPlayer.stop(); if (mounted) setState(() => speaking = false); }
+  Future<void> stop() async {
+    await tts.stop();
+    await neuralPlayer.stop();
+    await apiPlayer.stop();
+    if (mounted) setState(() { speaking = false; apiBusy = false; });
+  }
   void message(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s), behavior: SnackBarBehavior.floating));
   Future<void> saveText() async {
     final value = text.text.trim();
@@ -181,7 +231,16 @@ class _ReaderState extends State<Reader> {
       ])))));
   }
   @override
-  void dispose() { tts.stop(); neuralPlayer.dispose(); neuralTts.dispose(); text.dispose(); super.dispose(); }
+  void dispose() {
+    tts.stop();
+    neuralPlayer.dispose();
+    neuralTts.dispose();
+    apiPlayer.dispose();
+    text.dispose();
+    apiUrlController.dispose();
+    apiKeyController.dispose();
+    super.dispose();
+  }
   Widget slider(String label, double value, double min, double max, ValueChanged<double> change, String display) => Column(children: [
     Row(children: [Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600))), Text(display, style: const TextStyle(color: green, fontWeight: FontWeight.bold))]),
     Slider(value: value, min: min, max: max, activeColor: green, onChanged: change),
@@ -232,6 +291,38 @@ class _ReaderState extends State<Reader> {
           ],
         ]))),
         const SizedBox(height: 20),
+        Card(child: Padding(padding: const EdgeInsets.all(15), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.cloud_outlined, color: green),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('محرك Audar الهمسي عبر الإنترنت', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15))),
+            Switch(value: onlineMode, onChanged: (v) => setState(() => onlineMode = v)),
+          ]),
+          const Text('يستخدم محرك الهمس الذي اختبرناه. يتطلب الإنترنت وبقاء جلسة Colab والنفق قيد التشغيل.', style: TextStyle(fontSize: 12, height: 1.5)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: apiUrlController,
+            textDirection: TextDirection.ltr,
+            keyboardType: TextInputType.url,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'رابط API المؤقت', hintText: 'https://....trycloudflare.com', border: OutlineInputBorder(), prefixIcon: Icon(Icons.link)),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: apiKeyController,
+            textDirection: TextDirection.ltr,
+            obscureText: true,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'مفتاح API', border: OutlineInputBorder(), prefixIcon: Icon(Icons.key)),
+          ),
+          if (apiBusy) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
+            const SizedBox(height: 5),
+            const Text('جارٍ الاتصال بالمحرك وتوليد الصوت…', style: TextStyle(fontSize: 12)),
+          ],
+        ]))),
+        const SizedBox(height: 20),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('ضبط القراءة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)), TextButton.icon(onPressed: () => setState(() => advanced = !advanced), icon: Icon(advanced ? Icons.expand_less : Icons.tune), label: Text(advanced ? 'إخفاء' : 'تخصيص'))]),
         Card(child: Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 14), child: Column(children: [
           slider('سرعة القراءة', speed, .35, .9, (v) => setState(() => speed = v), speed.toStringAsFixed(2)),
@@ -246,7 +337,11 @@ class _ReaderState extends State<Reader> {
         ]))),
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: FilledButton.icon(onPressed: checking || (useNeural ? !neuralReady : !ready) || speaking ? null : readText, style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 17)), icon: Icon(speaking ? Icons.graphic_eq : Icons.play_arrow_rounded), label: Text(speaking ? 'تتم القراءة…' : 'ابدأ القراءة', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))),
+          Expanded(child: FilledButton.icon(onPressed: (speaking || apiBusy || (onlineMode
+              ? (apiUrlController.text.trim().isEmpty || apiKeyController.text.trim().isEmpty)
+              : (checking || (useNeural ? !neuralReady : !ready))))
+              ? null
+              : readText, style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 17)), icon: Icon(speaking ? Icons.graphic_eq : Icons.play_arrow_rounded), label: Text(speaking ? 'تتم القراءة…' : 'ابدأ القراءة', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))),
           const SizedBox(width: 10), IconButton.filledTonal(onPressed: speaking ? stop : null, icon: const Icon(Icons.stop_rounded), tooltip: 'إيقاف', style: IconButton.styleFrom(fixedSize: const Size(54, 54))),
         ]),
         const SizedBox(height: 12),
