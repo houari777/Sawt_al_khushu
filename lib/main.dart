@@ -98,7 +98,7 @@ class _ReaderState extends State<Reader> {
     try {
       if (!await SupertonicTTS.modelsReady()) {
         await SupertonicTTS.preDownloadModels(onProgress: (done, total, file, progress) {
-          if (mounted) setState(() => modelProgress = progress.clamp(0.0, 1.0));
+          if (mounted) setState(() => modelProgress = progress.clamp(0.0, 1.0).toDouble());
         });
       }
       await neuralTts.initialize();
