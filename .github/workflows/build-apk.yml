@@ -3,9 +3,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -14,100 +12,53 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-
       - name: Generate Android project files
         run: flutter create . --platforms=android --org com.sawtalkhushu
-
-      - name: Generate custom Sawt Al Khushu launcher icon
+      - name: Generate app icon
         run: |
           python3 -m pip install --quiet pillow
           python3 - <<'PY'
           from PIL import Image, ImageDraw
           from pathlib import Path
-          import math
           root = Path("android/app/src/main/res")
           sizes = {"mipmap-mdpi":48,"mipmap-hdpi":72,"mipmap-xhdpi":96,"mipmap-xxhdpi":144,"mipmap-xxxhdpi":192}
           def draw_icon(n):
-              im = Image.new("RGBA",(n,n),(8,38,48,255))
-              d = ImageDraw.Draw(im)
-              m = int(n*.075)
+              im=Image.new("RGBA",(n,n),(8,38,48,255)); d=ImageDraw.Draw(im); m=int(n*.075)
               d.rounded_rectangle((m,m,n-m,n-m),radius=int(n*.22),fill=(12,66,72,255),outline=(220,177,91,255),width=max(1,int(n*.025)))
-              # Mihrab arch
-              d.arc((int(n*.20),int(n*.10),int(n*.80),int(n*.82)),180,360,fill=(241,201,119,255),width=max(2,int(n*.035)))
-              d.line((int(n*.20),int(n*.46),int(n*.20),int(n*.78)),fill=(241,201,119,255),width=max(2,int(n*.035)))
-              d.line((int(n*.80),int(n*.46),int(n*.80),int(n*.78)),fill=(241,201,119,255),width=max(2,int(n*.035)))
-              # Sound-wave motif
-              cx, cy = n*.5, n*.39
+              d.arc((int(n*.2),int(n*.1),int(n*.8),int(n*.82)),180,360,fill=(241,201,119,255),width=max(2,int(n*.035)))
               for i,h in enumerate([.10,.18,.25,.18,.10]):
-                  x = int(n*(.34+i*.08))
-                  d.rounded_rectangle((x-int(n*.012),int(cy-h*n/2),x+int(n*.012),int(cy+h*n/2)),radius=max(1,int(n*.012)),fill=(244,203,119,255))
-              # Open book
-              y = int(n*.67)
-              d.polygon([(n*.22,y),(n*.48,y+n*.035),(n*.48,y+n*.17),(n*.22,y+n*.13)],fill=(250,242,220,255),outline=(224,177,91,255))
-              d.polygon([(n*.52,y+n*.035),(n*.78,y),(n*.78,y+n*.13),(n*.52,y+n*.17)],fill=(250,242,220,255),outline=(224,177,91,255))
-              d.line((n*.5,y+n*.025,n*.5,y+n*.17),fill=(166,119,52,255),width=max(1,int(n*.012)))
+                  x=int(n*(.34+i*.08)); d.rounded_rectangle((x-int(n*.012),int(n*.39-h*n/2),x+int(n*.012),int(n*.39+h*n/2)),radius=max(1,int(n*.012)),fill=(244,203,119,255))
+              y=int(n*.67)
+              d.polygon([(n*.22,y),(n*.48,y+n*.035),(n*.48,y+n*.17),(n*.22,y+n*.13)],fill=(250,242,220,255))
+              d.polygon([(n*.52,y+n*.035),(n*.78,y),(n*.78,y+n*.13),(n*.52,y+n*.17)],fill=(250,242,220,255))
               return im
-          for folder, size in sizes.items():
-              p = root / folder
-              p.mkdir(parents=True, exist_ok=True)
-              draw_icon(size).save(p / "ic_launcher.png")
-          nodpi = root / "drawable-nodpi"
-          nodpi.mkdir(parents=True, exist_ok=True)
-          draw_icon(432).save(nodpi / "ic_launcher_foreground.png")
-          anydpi = root / "mipmap-anydpi-v26"
-          anydpi.mkdir(parents=True, exist_ok=True)
-          (anydpi / "ic_launcher.xml").write_text('''<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@color/ic_launcher_background"/>
-              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>''')
-          values = root / "values"
-          values.mkdir(parents=True, exist_ok=True)
-          (values / "ic_launcher_background.xml").write_text('''<resources><color name="ic_launcher_background">#082630</color></resources>''')
+          for folder,size in sizes.items():
+              p=root/folder; p.mkdir(parents=True,exist_ok=True); draw_icon(size).save(p/"ic_launcher.png")
           PY
-
-      - name: Declare Android 11 text-to-speech service visibility
+      - name: Declare Android TTS service visibility
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("android/app/src/main/AndroidManifest.xml")
-          content = path.read_text()
-          internet = '    <uses-permission android:name="android.permission.INTERNET" />\\n'
-          if "android.permission.INTERNET" not in content:
-              content = content.replace("<application", internet + "    <application", 1)
-          queries = '''    <queries>
-                  <intent>
-                      <action android:name="android.intent.action.TTS_SERVICE" />
-                  </intent>
-              </queries>
-          '''
-          if "<queries>" not in content:
-              content = content.replace("<application", queries + "\n    <application", 1)
-          path.write_text(content)
+          p=Path("android/app/src/main/AndroidManifest.xml"); s=p.read_text()
+          if "android.permission.INTERNET" not in s:
+              s=s.replace("<application",'    <uses-permission android:name="android.permission.INTERNET" />\n    <application',1)
+          if "<queries>" not in s:
+              s=s.replace("<application",'    <queries><intent><action android:name="android.intent.action.TTS_SERVICE" /></intent></queries>\n    <application',1)
+          p.write_text(s)
           PY
-
       - name: Remove generated placeholder test
         run: rm -f test/widget_test.dart
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Analyze Flutter code
-        run: flutter analyze --no-fatal-infos
-
-      - name: Build installable debug APK (signed automatically)
-        run: flutter build apk --debug
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - name: Build compact ARM64 release APK
+        run: flutter build apk --release --target-platform android-arm64
+      - uses: actions/upload-artifact@v4
         with:
-          name: sawt-al-khushu-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: sawt-al-khushu-release-arm64
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
