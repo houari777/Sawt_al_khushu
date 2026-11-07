@@ -12,6 +12,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_tts: ^4.2.5
   shared_preferences: ^2.5.3
+  supertonic_flutter: ^2.0.0
 
 dev_dependencies:
   flutter_test:
