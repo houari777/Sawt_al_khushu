@@ -1,7 +1,7 @@
 name: sawt_al_khushu
-description: تطبيق صوت الخشوع لكتابة النصوص العربية وتجهيز قراءتها محلياً
+description: تطبيق صوت الخشوع للقراءة العربية الهادئة
 publish_to: "none"
-version: 0.2.0+2
+version: 0.3.0+3
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   flutter_tts: ^4.2.5
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
