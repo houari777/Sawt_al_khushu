@@ -59,11 +59,14 @@ jobs:
               p = root / folder
               p.mkdir(parents=True, exist_ok=True)
               draw_icon(size).save(p / "ic_launcher.png")
+          nodpi = root / "drawable-nodpi"
+          nodpi.mkdir(parents=True, exist_ok=True)
+          draw_icon(432).save(nodpi / "ic_launcher_foreground.png")
           anydpi = root / "mipmap-anydpi-v26"
           anydpi.mkdir(parents=True, exist_ok=True)
           (anydpi / "ic_launcher.xml").write_text('''<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
               <background android:drawable="@color/ic_launcher_background"/>
-              <foreground android:drawable="@mipmap/ic_launcher"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
           </adaptive-icon>''')
           values = root / "values"
           values.mkdir(parents=True, exist_ok=True)
