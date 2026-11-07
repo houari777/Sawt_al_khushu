@@ -26,6 +26,23 @@ jobs:
       - name: Generate Android project files
         run: flutter create . --platforms=android --org com.sawtalkhushu
 
+      - name: Declare Android 11 text-to-speech service visibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          content = path.read_text()
+          queries = '''    <queries>
+                  <intent>
+                      <action android:name="android.intent.action.TTS_SERVICE" />
+                  </intent>
+              </queries>
+          '''
+          if "<queries>" not in content:
+              content = content.replace("<application", queries + "\n    <application", 1)
+          path.write_text(content)
+          PY
+
       - name: Remove generated placeholder test
         run: rm -f test/widget_test.dart
 
