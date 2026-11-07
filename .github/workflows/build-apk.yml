@@ -79,6 +79,9 @@ jobs:
           from pathlib import Path
           path = Path("android/app/src/main/AndroidManifest.xml")
           content = path.read_text()
+          internet = '    <uses-permission android:name="android.permission.INTERNET" />\\n'
+          if "android.permission.INTERNET" not in content:
+              content = content.replace("<application", internet + "    <application", 1)
           queries = '''    <queries>
                   <intent>
                       <action android:name="android.intent.action.TTS_SERVICE" />
