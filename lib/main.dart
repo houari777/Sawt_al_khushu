@@ -1,275 +1,193 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
-  runApp(const SawtAlKhushuApp());
-}
+void main() => runApp(const App());
+const green = Color(0xFF176B58);
 
-class SawtAlKhushuApp extends StatelessWidget {
-  const SawtAlKhushuApp({super.key});
-
+class App extends StatefulWidget {
+  const App({super.key});
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'صوت الخشوع',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF176B58),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        fontFamily: 'Arial',
-      ),
-      home: const ReaderPage(),
-    );
-  }
+  State<App> createState() => _AppState();
 }
-
-class ReaderPage extends StatefulWidget {
-  const ReaderPage({super.key});
-
+class _AppState extends State<App> {
+  ThemeMode mode = ThemeMode.light;
   @override
-  State<ReaderPage> createState() => _ReaderPageState();
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false, title: 'صوت الخشوع', themeMode: mode,
+    theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: green), scaffoldBackgroundColor: const Color(0xFFF5F7F3)),
+    darkTheme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: green, brightness: Brightness.dark)),
+    home: Reader(dark: mode == ThemeMode.dark, toggle: () => setState(() => mode = mode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light)),
+  );
 }
 
-class _ReaderPageState extends State<ReaderPage> {
-  final TextEditingController _textController = TextEditingController();
-  final FlutterTts _tts = FlutterTts();
-
-  double _speed = 0.8;
-  bool _checkingVoice = true;
-  bool _voiceReady = false;
-  bool _speaking = false;
-  String _status = 'جارٍ فحص محرك الصوت العربي على الهاتف...';
-  String _arabicLocale = 'ar';
+class Reader extends StatefulWidget {
+  const Reader({super.key, required this.dark, required this.toggle});
+  final bool dark;
+  final VoidCallback toggle;
+  @override
+  State<Reader> createState() => _ReaderState();
+}
+class _ReaderState extends State<Reader> {
+  final text = TextEditingController();
+  final tts = FlutterTts();
+  List<String> saved = [];
+  double speed = .72, volume = .42, pause = .7, pitch = .92;
+  bool checking = true, ready = false, speaking = false, advanced = false;
+  String locale = 'ar', status = 'جارٍ فحص الصوت العربي…';
+  int get words => text.text.trim().isEmpty ? 0 : text.text.trim().split(RegExp(r'\s+')).length;
 
   @override
   void initState() {
     super.initState();
-    _configureSpeech();
+    text.addListener(() { if (mounted) setState(() {}); });
+    load();
+    configure();
   }
-
-  Future<void> _configureSpeech() async {
-    _tts.setStartHandler(() {
-      if (mounted) setState(() => _speaking = true);
-    });
-    _tts.setCompletionHandler(() {
-      if (mounted) setState(() => _speaking = false);
-    });
-    _tts.setCancelHandler(() {
-      if (mounted) setState(() => _speaking = false);
-    });
-    _tts.setErrorHandler((message) {
-      if (mounted) {
-        setState(() {
-          _speaking = false;
-          _status = 'تعذّر تشغيل الصوت: $message';
-        });
-      }
-    });
-
+  Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    if (mounted) setState(() => saved = p.getStringList('saved_readings_v1') ?? []);
+  }
+  Future<void> persist() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setStringList('saved_readings_v1', saved);
+  }
+  Future<void> configure() async {
+    setState(() { checking = true; ready = false; });
+    tts.setStartHandler(() { if (mounted) setState(() => speaking = true); });
+    tts.setCompletionHandler(() { if (mounted) setState(() => speaking = false); });
+    tts.setCancelHandler(() { if (mounted) setState(() => speaking = false); });
+    tts.setErrorHandler((e) { if (mounted) setState(() { speaking = false; status = 'تعذّرت القراءة: ' + e; }); });
     try {
-      await _tts.setSpeechRate(_speed);
-      await _tts.setVolume(1.0);
-      await _tts.setPitch(0.92);
-
-      final dynamic rawVoices = await _tts.getVoices;
-      final voices = (rawVoices as List? ?? [])
-          .whereType<Map>()
-          .map((voice) => Map<String, dynamic>.from(voice))
-          .where((voice) {
-            final locale = (voice['locale'] ?? '').toString().toLowerCase();
-            final networkRequired = voice['network_required'] == true ||
-                voice['network_required'].toString().toLowerCase() == 'true';
-            return locale.startsWith('ar') && !networkRequired;
-          })
-          .toList();
-
+      await tts.awaitSpeakCompletion(true);
+      await tts.setSpeechRate(speed);
+      await tts.setVolume(volume);
+      await tts.setPitch(pitch);
+      final raw = await tts.getVoices;
+      final voices = (raw as List? ?? []).whereType<Map>().where((v) {
+        final l = (v['locale'] ?? '').toString().toLowerCase();
+        final net = (v['network_required'] == true || (v['network_required'] ?? '').toString().toLowerCase() == 'true');
+        return l.startsWith('ar') && !net;
+      }).toList();
       if (voices.isNotEmpty) {
-        final selected = voices.firstWhere(
-          (voice) => (voice['locale'] ?? '').toString().toLowerCase() == 'ar-sa',
-          orElse: () => voices.first,
-        );
-        _arabicLocale = selected['locale'].toString();
-        await _tts.setVoice({
-          'name': selected['name'].toString(),
-          'locale': _arabicLocale,
-        });
-        await _tts.setLanguage(_arabicLocale);
-        if (mounted) {
-          setState(() {
-            _voiceReady = true;
-            _checkingVoice = false;
-            _status = 'يوجد صوت عربي محلي على الهاتف. يمكنك تجربة القراءة دون إنترنت.';
-          });
-        }
-        return;
-      }
-
-      final installed = await _tts.isLanguageInstalled('ar');
-      if (installed == true) {
-        await _tts.setLanguage('ar');
-        if (mounted) {
-          setState(() {
-            _voiceReady = true;
-            _checkingVoice = false;
-            _arabicLocale = 'ar';
-            _status = 'اللغة العربية مثبتة. جرّب القراءة؛ إذا طلب المحرك اتصالاً بالإنترنت فلن يكون الصوت محلياً.';
-          });
-        }
+        final v = voices.firstWhere((x) => (x['locale'] ?? '').toString().toLowerCase() == 'ar-sa', orElse: () => voices.first);
+        locale = (v['locale'] ?? 'ar').toString();
+        await tts.setVoice({'name': (v['name'] ?? '').toString(), 'locale': locale});
+        await tts.setLanguage(locale);
+        if (mounted) setState(() { ready = true; checking = false; status = 'الصوت العربي المحلي جاهز. جودة النطق تتبع المحرك المثبّت.'; });
+      } else if (await tts.isLanguageInstalled('ar') == true) {
+        locale = 'ar';
+        await tts.setLanguage(locale);
+        if (mounted) setState(() { ready = true; checking = false; status = 'اللغة العربية متاحة على الهاتف.'; });
       } else if (mounted) {
-        setState(() {
-          _voiceReady = false;
-          _checkingVoice = false;
-          _status = 'لا يوجد حالياً صوت عربي مثبت محلياً. ثبّت بيانات صوت عربية من إعدادات تحويل النص إلى كلام في الهاتف ثم اضغط إعادة الفحص.';
-        });
+        setState(() { checking = false; status = 'لا يوجد صوت عربي محلي. ثبّت صوتاً عربياً من إعدادات تحويل النص إلى كلام ثم أعد الفحص.'; });
       }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _voiceReady = false;
-          _checkingVoice = false;
-          _status = 'لم نتمكن من فحص محرك الصوت: $error';
-        });
-      }
+    } catch (e) {
+      if (mounted) setState(() { checking = false; status = 'تعذّر فحص محرك الصوت: ' + e.toString(); });
     }
   }
-
-  Future<void> _speak() async {
-    final text = _textController.text.trim();
-    if (text.isEmpty) {
-      setState(() => _status = 'اكتب نصاً أولاً ثم ابدأ القراءة.');
-      return;
-    }
-    if (!_voiceReady) {
-      setState(() => _status = 'الصوت العربي غير جاهز. افحص المحرك أو ثبّت بيانات الصوت العربية أولاً.');
-      return;
-    }
+  Future<void> readText() async {
+    final value = text.text.trim();
+    if (value.isEmpty) return message('اكتب نصاً أولاً.');
+    if (!ready) return message('الصوت العربي غير جاهز.');
     try {
-      await _tts.stop();
-      await _tts.setSpeechRate(_speed);
-      await _tts.setLanguage(_arabicLocale);
-      await _tts.speak(text);
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _speaking = false;
-          _status = 'حدث خطأ أثناء القراءة: $error';
-        });
+      await tts.stop();
+      await tts.setSpeechRate(speed);
+      await tts.setVolume(volume);
+      await tts.setPitch(pitch);
+      for (final p in value.split(RegExp(r'\n\s*\n')).map((x) => x.trim()).where((x) => x.isNotEmpty)) {
+        if (!mounted) return;
+        await tts.speak(p);
+        if (pause > 0) await Future<void>.delayed(Duration(milliseconds: (pause * 1000).round()));
       }
+      if (mounted) setState(() => speaking = false);
+    } catch (e) {
+      if (mounted) setState(() { speaking = false; status = 'حدث خطأ أثناء القراءة: ' + e.toString(); });
     }
   }
-
-  Future<void> _stop() async {
-    await _tts.stop();
-    if (mounted) setState(() => _speaking = false);
+  Future<void> stop() async { await tts.stop(); if (mounted) setState(() => speaking = false); }
+  void message(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s), behavior: SnackBarBehavior.floating));
+  Future<void> saveText() async {
+    final value = text.text.trim();
+    if (value.isEmpty) return message('لا يوجد نص لحفظه.');
+    if (saved.contains(value)) return message('النص محفوظ بالفعل.');
+    setState(() => saved = [value, ...saved]);
+    await persist();
+    message('حُفظ النص على هاتفك.');
   }
-
+  Future<void> library() async {
+    await showModalBottomSheet<void>(context: context, isScrollControlled: true, showDragHandle: true, builder: (ctx) =>
+      Directionality(textDirection: TextDirection.rtl, child: SafeArea(child: SizedBox(height: MediaQuery.of(context).size.height * .65, child: Column(children: [
+        const Padding(padding: EdgeInsets.all(16), child: Text('مكتبتي', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold))),
+        Expanded(child: saved.isEmpty ? const Center(child: Text('لا توجد نصوص محفوظة بعد.')) : ListView.builder(itemCount: saved.length, itemBuilder: (c, i) => ListTile(
+          title: Text(saved[i], maxLines: 2, overflow: TextOverflow.ellipsis),
+          onTap: () { text.text = saved[i]; Navigator.pop(ctx); },
+          trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { setState(() => saved.removeAt(i)); await persist(); if (mounted) Navigator.pop(ctx); if (mounted) library(); }),
+        ))),
+      ])))));
+  }
   @override
-  void dispose() {
-    _tts.stop();
-    _textController.dispose();
-    super.dispose();
-  }
+  void dispose() { tts.stop(); text.dispose(); super.dispose(); }
+  Widget slider(String label, double value, double min, double max, ValueChanged<double> change, String display) => Column(children: [
+    Row(children: [Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600))), Text(display, style: const TextStyle(color: green, fontWeight: FontWeight.bold))]),
+    Slider(value: value, min: min, max: max, activeColor: green, onChanged: change),
+  ]);
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('صوت الخشوع'),
-          centerTitle: true,
-        ),
-        body: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              const Icon(
-                Icons.menu_book_rounded,
-                size: 64,
-                color: Color(0xFF176B58),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'اكتب النص واستعد لقراءته بخشوع',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _textController,
-                minLines: 7,
-                maxLines: 14,
-                textAlign: TextAlign.right,
-                decoration: const InputDecoration(
-                  hintText: 'اكتب النص العربي هنا...',
-                  border: OutlineInputBorder(),
-                  alignLabelWithHint: true,
-                ),
-              ),
-              const SizedBox(height: 20),
-              Text('سرعة القراءة: ${_speed.toStringAsFixed(1)}'),
-              Slider(
-                value: _speed,
-                min: 0.5,
-                max: 1.2,
-                divisions: 7,
-                label: _speed.toStringAsFixed(1),
-                onChanged: (value) => setState(() => _speed = value),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: _checkingVoice || !_voiceReady ? null : _speak,
-                icon: Icon(_speaking ? Icons.volume_up : Icons.play_arrow_rounded),
-                label: Text(_speaking ? 'تتم القراءة...' : 'ابدأ القراءة'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _speaking ? _stop : null,
-                icon: const Icon(Icons.stop_rounded),
-                label: const Text('إيقاف القراءة'),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _voiceReady
-                      ? Colors.green.withValues(alpha: 0.08)
-                      : Colors.orange.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  _checkingVoice ? 'جارٍ فحص الصوت...' : _status,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(height: 1.5),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: _checkingVoice
-                    ? null
-                    : () {
-                        setState(() {
-                          _checkingVoice = true;
-                          _voiceReady = false;
-                        });
-                        _configureSpeech();
-                      },
-                icon: const Icon(Icons.refresh),
-                label: const Text('إعادة فحص الصوت'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: () => _textController.clear(),
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('مسح النص'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    final cs = Theme.of(context).colorScheme;
+    return Directionality(textDirection: TextDirection.rtl, child: Scaffold(
+      appBar: AppBar(title: Row(children: [
+        Container(width: 38, height: 38, decoration: BoxDecoration(color: green, borderRadius: BorderRadius.circular(13)), child: const Icon(Icons.menu_book_rounded, color: Colors.white)),
+        const SizedBox(width: 10), const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('صوت الخشوع', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)), Text('رفيق القراءة الهادئة', style: TextStyle(fontSize: 11, color: Colors.grey))]),
+      ]), actions: [IconButton(onPressed: library, icon: const Icon(Icons.bookmarks_outlined)), IconButton(onPressed: widget.toggle, icon: Icon(widget.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined))]),
+      body: SafeArea(child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 28), children: [
+        Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF145847), Color(0xFF287B64)], begin: Alignment.topRight, end: Alignment.bottomLeft), borderRadius: BorderRadius.circular(26)), child: Row(children: [
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('على مهل… وبطمأنينة', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.bold)), SizedBox(height: 7), Text('اكتب، اضبط الإيقاع، ثم استمع بصوت منخفض وواضح.', style: TextStyle(color: Colors.white70, height: 1.5)), SizedBox(height: 12), Row(children: [Icon(Icons.waves_rounded, color: Color(0xFFE8C98C), size: 17), SizedBox(width: 6), Text('وضع القراءة الهادئة', style: TextStyle(color: Color(0xFFFFE7B8), fontSize: 12, fontWeight: FontWeight.w600))])])),
+          const SizedBox(width: 12), Container(width: 66, height: 66, decoration: BoxDecoration(color: Colors.white12, shape: BoxShape.circle, border: Border.all(color: Colors.white24)), child: const Icon(Icons.spa_outlined, color: Color(0xFFFFE7B8), size: 34)),
+        ])),
+        const SizedBox(height: 18),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('النص المراد قراءته', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)), Text(words.toString() + ' كلمة', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12))]),
+        const SizedBox(height: 10),
+        Card(child: Padding(padding: const EdgeInsets.all(14), child: TextField(controller: text, minLines: 8, maxLines: 14, textAlign: TextAlign.right, textDirection: TextDirection.rtl, style: const TextStyle(fontSize: 19, height: 1.9), decoration: InputDecoration(hintText: 'اكتب هنا…\n\nلأفضل نتيجة في العربية، أضف التشكيل للكلمات التي تحتمل أكثر من نطق.', hintStyle: TextStyle(color: cs.onSurfaceVariant, fontSize: 15, height: 1.8), border: InputBorder.none)))),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: OutlinedButton.icon(onPressed: saveText, icon: const Icon(Icons.bookmark_add_outlined), label: const Text('حفظ'))),
+          const SizedBox(width: 7), Expanded(child: OutlinedButton.icon(onPressed: text.clear, icon: const Icon(Icons.delete_outline), label: const Text('مسح'))),
+          const SizedBox(width: 7), Expanded(child: OutlinedButton.icon(onPressed: () => text.text = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ\n\nالْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ', icon: const Icon(Icons.auto_awesome_outlined), label: const Text('مثال مشكول'))),
+        ]),
+        const SizedBox(height: 20),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('ضبط القراءة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)), TextButton.icon(onPressed: () => setState(() => advanced = !advanced), icon: Icon(advanced ? Icons.expand_less : Icons.tune), label: Text(advanced ? 'إخفاء' : 'تخصيص'))]),
+        Card(child: Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 14), child: Column(children: [
+          slider('سرعة القراءة', speed, .35, .9, (v) => setState(() => speed = v), speed.toStringAsFixed(2)),
+          slider('مستوى الصوت', volume, .08, 1, (v) => setState(() => volume = v), (volume * 100).round().toString() + '%'),
+          if (advanced) ...[
+            const Divider(height: 22),
+            slider('الوقفة بين الفقرات', pause, 0, 2, (v) => setState(() => pause = v), pause.toStringAsFixed(1) + ' ث'),
+            slider('حدة الصوت', pitch, .7, 1.2, (v) => setState(() => pitch = v), pitch.toStringAsFixed(2)),
+            Align(alignment: Alignment.centerRight, child: TextButton(onPressed: () => setState(() { speed = .72; volume = .42; pause = .7; pitch = .92; }), child: const Text('إعادة الضبط'))),
+          ],
+        ]))),
+        const SizedBox(height: 16),
+        Row(children: [
+          Expanded(child: FilledButton.icon(onPressed: checking || !ready || speaking ? null : readText, style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 17)), icon: Icon(speaking ? Icons.graphic_eq : Icons.play_arrow_rounded), label: Text(speaking ? 'تتم القراءة…' : 'ابدأ القراءة', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))),
+          const SizedBox(width: 10), IconButton.filledTonal(onPressed: speaking ? stop : null, icon: const Icon(Icons.stop_rounded), tooltip: 'إيقاف', style: IconButton.styleFrom(fixedSize: const Size(54, 54))),
+        ]),
+        const SizedBox(height: 12),
+        Card(child: Padding(padding: const EdgeInsets.all(14), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(ready ? Icons.check_circle_outline : Icons.info_outline, color: ready ? green : const Color(0xFFC59A52)), const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(checking ? 'فحص محرك الصوت' : ready ? 'محرك الصوت جاهز' : 'الصوت يحتاج إعداداً', style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4), Text(status, style: TextStyle(color: cs.onSurfaceVariant, height: 1.5, fontSize: 12)),
+            if (!checking) TextButton(onPressed: configure, child: const Text('إعادة فحص الصوت')),
+          ])),
+        ]))),
+        const SizedBox(height: 12),
+        Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: cs.surfaceContainerHighest.withValues(alpha: .65), borderRadius: BorderRadius.circular(18)), child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.lightbulb_outline, size: 19), SizedBox(width: 9), Expanded(child: Text('ملاحظة نطق: التشكيل يساعد المحرك على اختيار النطق المقصود. محرك الهاتف الحالي لا يضمن أحكام التجويد أو مخارج الحروف وصفاتها؛ هذه النسخة تضبط مستوى الصوت والسرعة والوقفات فقط.', style: TextStyle(fontSize: 12, height: 1.6))),
+        ])),
+        const SizedBox(height: 12), Center(child: Text('صُنع ليكون الصوت هادئاً… والمعنى حاضراً', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11))),
+      ])),
+    ));
   }
 }
