@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 void main() {
   runApp(const SawtAlKhushuApp());
@@ -34,10 +35,140 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> {
   final TextEditingController _textController = TextEditingController();
+  final FlutterTts _tts = FlutterTts();
+
   double _speed = 0.8;
+  bool _checkingVoice = true;
+  bool _voiceReady = false;
+  bool _speaking = false;
+  String _status = 'جارٍ فحص محرك الصوت العربي على الهاتف...';
+  String _arabicLocale = 'ar';
+
+  @override
+  void initState() {
+    super.initState();
+    _configureSpeech();
+  }
+
+  Future<void> _configureSpeech() async {
+    _tts.setStartHandler(() {
+      if (mounted) setState(() => _speaking = true);
+    });
+    _tts.setCompletionHandler(() {
+      if (mounted) setState(() => _speaking = false);
+    });
+    _tts.setCancelHandler(() {
+      if (mounted) setState(() => _speaking = false);
+    });
+    _tts.setErrorHandler((message) {
+      if (mounted) {
+        setState(() {
+          _speaking = false;
+          _status = 'تعذّر تشغيل الصوت: $message';
+        });
+      }
+    });
+
+    try {
+      await _tts.setSpeechRate(_speed);
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(0.92);
+
+      final dynamic rawVoices = await _tts.getVoices;
+      final voices = (rawVoices as List? ?? [])
+          .whereType<Map>()
+          .map((voice) => Map<String, dynamic>.from(voice))
+          .where((voice) {
+            final locale = (voice['locale'] ?? '').toString().toLowerCase();
+            final networkRequired = voice['network_required'] == true ||
+                voice['network_required'].toString().toLowerCase() == 'true';
+            return locale.startsWith('ar') && !networkRequired;
+          })
+          .toList();
+
+      if (voices.isNotEmpty) {
+        final selected = voices.firstWhere(
+          (voice) => (voice['locale'] ?? '').toString().toLowerCase() == 'ar-sa',
+          orElse: () => voices.first,
+        );
+        _arabicLocale = selected['locale'].toString();
+        await _tts.setVoice({
+          'name': selected['name'].toString(),
+          'locale': _arabicLocale,
+        });
+        await _tts.setLanguage(_arabicLocale);
+        if (mounted) {
+          setState(() {
+            _voiceReady = true;
+            _checkingVoice = false;
+            _status = 'يوجد صوت عربي محلي على الهاتف. يمكنك تجربة القراءة دون إنترنت.';
+          });
+        }
+        return;
+      }
+
+      final installed = await _tts.isLanguageInstalled('ar');
+      if (installed == true) {
+        await _tts.setLanguage('ar');
+        if (mounted) {
+          setState(() {
+            _voiceReady = true;
+            _checkingVoice = false;
+            _arabicLocale = 'ar';
+            _status = 'اللغة العربية مثبتة. جرّب القراءة؛ إذا طلب المحرك اتصالاً بالإنترنت فلن يكون الصوت محلياً.';
+          });
+        }
+      } else if (mounted) {
+        setState(() {
+          _voiceReady = false;
+          _checkingVoice = false;
+          _status = 'لا يوجد حالياً صوت عربي مثبت محلياً. ثبّت بيانات صوت عربية من إعدادات تحويل النص إلى كلام في الهاتف ثم اضغط إعادة الفحص.';
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _voiceReady = false;
+          _checkingVoice = false;
+          _status = 'لم نتمكن من فحص محرك الصوت: $error';
+        });
+      }
+    }
+  }
+
+  Future<void> _speak() async {
+    final text = _textController.text.trim();
+    if (text.isEmpty) {
+      setState(() => _status = 'اكتب نصاً أولاً ثم ابدأ القراءة.');
+      return;
+    }
+    if (!_voiceReady) {
+      setState(() => _status = 'الصوت العربي غير جاهز. افحص المحرك أو ثبّت بيانات الصوت العربية أولاً.');
+      return;
+    }
+    try {
+      await _tts.stop();
+      await _tts.setSpeechRate(_speed);
+      await _tts.setLanguage(_arabicLocale);
+      await _tts.speak(text);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _speaking = false;
+          _status = 'حدث خطأ أثناء القراءة: $error';
+        });
+      }
+    }
+  }
+
+  Future<void> _stop() async {
+    await _tts.stop();
+    if (mounted) setState(() => _speaking = false);
+  }
 
   @override
   void dispose() {
+    _tts.stop();
     _textController.dispose();
     super.dispose();
   }
@@ -90,17 +221,46 @@ class _ReaderPageState extends State<ReaderPage> {
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: null,
-                icon: const Icon(Icons.volume_up_rounded),
-                label: const Text('ابدأ القراءة'),
+                onPressed: _checkingVoice || !_voiceReady ? null : _speak,
+                icon: Icon(_speaking ? Icons.volume_up : Icons.play_arrow_rounded),
+                label: Text(_speaking ? 'تتم القراءة...' : 'ابدأ القراءة'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _speaking ? _stop : null,
+                icon: const Icon(Icons.stop_rounded),
+                label: const Text('إيقاف القراءة'),
               ),
               const SizedBox(height: 10),
-              const Text(
-                'القراءة الصوتية غير مفعّلة بعد. سيتم تفعيلها بعد دمج محرك نطق محلي واختباره؛ لذلك لا يعمل هذا الزر حالياً.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.deepOrange, height: 1.5),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _voiceReady
+                      ? Colors.green.withValues(alpha: 0.08)
+                      : Colors.orange.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  _checkingVoice ? 'جارٍ فحص الصوت...' : _status,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(height: 1.5),
+                ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _checkingVoice
+                    ? null
+                    : () {
+                        setState(() {
+                          _checkingVoice = true;
+                          _voiceReady = false;
+                        });
+                        _configureSpeech();
+                      },
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة فحص الصوت'),
+              ),
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: () => _textController.clear(),
                 icon: const Icon(Icons.delete_outline),
