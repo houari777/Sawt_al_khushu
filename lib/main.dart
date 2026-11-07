@@ -103,7 +103,7 @@ class _ReaderState extends State<Reader> {
       }
       await neuralTts.initialize();
       if (!mounted) return;
-      setState(() { neuralReady = true; neuralLoading = false; modelProgress = 1; status = 'الصوت الرجولي المحلي جاهز. يمكنك الآن فصل الإنترنت.'; });
+      setState(() { neuralReady = true; neuralLoading = false; modelProgress = 1; useNeural = true; status = 'الصوت الرجولي المحلي جاهز ومحدد للقراءة. يمكنك الآن فصل الإنترنت.'; });
       message('تم تجهيز الصوت الرجولي على الهاتف.');
     } catch (e) {
       if (!mounted) return;
@@ -115,7 +115,7 @@ class _ReaderState extends State<Reader> {
   Future<void> readWithNeural() async {
     if (!neuralReady) return message('نزّل الصوت الرجولي أولاً.');
     if (text.text.trim().isEmpty) return message('اكتب نصاً أولاً.');
-    final paragraphs = text.text.trim().split(RegExp(r'\\n\\s*\\n')).map((x) => x.trim()).where((x) => x.isNotEmpty);
+    final paragraphs = text.text.trim().split(RegExp(r'\n\s*\n')).map((x) => x.trim()).where((x) => x.isNotEmpty);
     try {
       await neuralPlayer.stop();
       if (mounted) setState(() => speaking = true);
@@ -125,7 +125,7 @@ class _ReaderState extends State<Reader> {
           paragraph,
           language: 'ar',
           voiceStyle: maleVoice,
-          config: TTSConfig(speechSpeed: 0.88, denoisingSteps: 5, silenceDuration: pause),
+          config: TTSConfig(speechSpeed: speed.clamp(.7, .9).toDouble(), denoisingSteps: 5, silenceDuration: 0.0),
         );
         if (!mounted || !speaking) break;
         await neuralPlayer.play(result);
@@ -235,7 +235,8 @@ class _ReaderState extends State<Reader> {
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('ضبط القراءة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)), TextButton.icon(onPressed: () => setState(() => advanced = !advanced), icon: Icon(advanced ? Icons.expand_less : Icons.tune), label: Text(advanced ? 'إخفاء' : 'تخصيص'))]),
         Card(child: Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 14), child: Column(children: [
           slider('سرعة القراءة', speed, .35, .9, (v) => setState(() => speed = v), speed.toStringAsFixed(2)),
-          slider('مستوى الصوت', volume, .08, 1, (v) => setState(() => volume = v), (volume * 100).round().toString() + '%'),
+          if (!useNeural) slider('مستوى صوت محرك الهاتف', volume, .08, 1, (v) => setState(() => volume = v), (volume * 100).round().toString() + '%')
+          else const Align(alignment: Alignment.centerRight, child: Text('للصوت الرجولي: استخدم أزرار مستوى الصوت في الهاتف.', style: TextStyle(fontSize: 12, color: Colors.grey))),
           if (advanced) ...[
             const Divider(height: 22),
             slider('الوقفة بين الفقرات', pause, 0, 2, (v) => setState(() => pause = v), pause.toStringAsFixed(1) + ' ث'),
@@ -245,7 +246,7 @@ class _ReaderState extends State<Reader> {
         ]))),
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: FilledButton.icon(onPressed: checking || !ready || speaking ? null : readText, style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 17)), icon: Icon(speaking ? Icons.graphic_eq : Icons.play_arrow_rounded), label: Text(speaking ? 'تتم القراءة…' : 'ابدأ القراءة', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))),
+          Expanded(child: FilledButton.icon(onPressed: checking || (useNeural ? !neuralReady : !ready) || speaking ? null : readText, style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 17)), icon: Icon(speaking ? Icons.graphic_eq : Icons.play_arrow_rounded), label: Text(speaking ? 'تتم القراءة…' : 'ابدأ القراءة', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))),
           const SizedBox(width: 10), IconButton.filledTonal(onPressed: speaking ? stop : null, icon: const Icon(Icons.stop_rounded), tooltip: 'إيقاف', style: IconButton.styleFrom(fixedSize: const Size(54, 54))),
         ]),
         const SizedBox(height: 12),
